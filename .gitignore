@@ -1,0 +1,16 @@
+INSTALL
+Makefile
+Makefile.in
+aclocal.m4
+autom4te.cache/
+config.guess
+config.log
+config.status
+config.sub
+configure
+debian/files
+debian/tmp/
+debian/vyatta-vmware-tools.debhelper.log
+debian/vyatta-vmware-tools.substvars
+debian/vyatta-vmware-tools/
+

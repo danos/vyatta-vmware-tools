@@ -1,0 +1,13 @@
+Source: vyatta-vmware-tools
+Section: contrib/net
+Priority: extra
+Maintainer: Vyatta Package Maintainers <DL-vyatta-help@att.com>
+Build-Depends: debhelper (>= 5), autotools-dev, dh-autoreconf
+Standards-Version: 3.7.2
+
+Package: vyatta-vmware-tools
+Architecture: all
+Depends: open-vm-tools
+Description: Used for provisioning using vmware tools.
+ This package has scripts supporting extraction of 
+ configuration parameters from vmware .vmx files

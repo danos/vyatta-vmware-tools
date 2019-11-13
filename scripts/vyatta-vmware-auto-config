@@ -1,0 +1,155 @@
+#!/bin/bash
+
+# **** License ****
+# Copyright (c) 2017-2019, AT&T Intellectual Property. All rights reserved.
+# Copyright (c) 2014 by Brocade Communications Systems, Inc.
+# All rights reserved.
+#
+# SPDX-License-Identifier: LGPL-2.1-only
+#
+# **** End License ****
+
+
+# This script performs configuration of a dataplane interface based on
+# the contents the OVF environment parameters set when deploying an ESX
+# template (ova) on VMware.  The script configures the first dataplane
+# interface during the first boot with the valids from the config.
+#
+#
+# The config file contains 'key=value' pairs defined as follows:
+#
+# management_ipv4_address=<ipv4_address>
+# management_ipv6_address=<ipv6_address>
+# management_ipv4_subnet=<ipv4 subnet>
+# management_subnet_ipv4_gateway=<ipv4 gateway>
+# management_ipv6_subnet=<ipv6 subnet>
+# management_subnet_ipv6_gateway=<ipv6 gateway>
+# management_dns_server=<dns forwarding addr>
+#
+# If a key is not defined, then no configuration is performed.
+#
+# In all cases, the parameter values are checked against the current
+# configuration and only added if not present.
+#
+
+# Only if on vmware host.
+! /usr/bin/vmware-checkvm > /dev/null 2>&1 && exit 0
+
+
+#
+# Required to run this as a login shell under configd. 
+# So do that.
+#
+/opt/vyatta/sbin/lu -user configd -- /bin/vcli <<"EOF"
+
+
+VMTOOLSD=/usr/bin/vmtoolsd
+CONFIG=/tmp/ovf_env.xml
+COMMIT=0
+
+# Always first interface
+intfs=( $(cli-shell-api getTmplAllowed interfaces dataplane | tr -d \''\') )
+IFNAME=${intfs[0]}
+[[ -z "$IFNAME" ]] && logx "Unable to obtain interface name" 1
+
+noninteractive
+
+# Logging function
+function log {
+	echo "$1"
+	logger "auto-config: " "$1"
+}
+
+# Log and exit.
+function logx {
+	log "$1 exit: $2"
+	/bin/rm -f $CONFIG
+	exit $2
+}
+
+# Lookup
+function lookup {
+       for i in $(list $1)
+       do
+               [ $i == $2 ] && return 0
+       done
+       return 1
+}
+
+# check/set addr
+function check_addr {
+
+       if ( lookup "interfaces dataplane $IFNAME address" $1 )
+	then
+		log "$2 exists on $IFNAME, ignoring"
+	else
+		log "set $IFNAME address to $1"
+		output=$(set interfaces dataplane $IFNAME address $1)
+		[ $? != 0 ] && logx "set interface $IFNAME to $1 failed:  $output" 1
+		COMMIT=1
+	fi
+}
+
+# check route
+function check_route {
+
+	if ( lookup "protocols static $1 $2 next-hop" $3)
+	then
+		log "Route $2 exists, ignoring"
+		return
+	else
+		log "set $1 $2 next-hop $3"
+		output=$(set protocols static $1 $2 next-hop $3)
+		[ $? != 0 ] && logx "set $1 $2 next-hop $3 failed: $output" 1
+		COMMIT=1
+	fi
+}
+
+log "started"
+
+#
+# Get the xml
+#
+$VMTOOLSD --cmd 'info-get guestinfo.ovfEnv' > $CONFIG
+[[ ! -r $CONFIG ]] && logx "No OVF data, exiting..." 0
+
+# parse
+IPV4=`grep management_ipv4_address $CONFIG | cut -d '"' -f4`
+IPV6=`grep management_ipv6_address $CONFIG | cut -d '"' -f4`
+IPV4_SUBNET=`grep management_ipv4_subnet $CONFIG | cut -d '"' -f4`
+IPV4_GATEWAY=`grep management_subnet_ipv4_gateway $CONFIG | cut -d '"' -f4`
+IPV6_GATEWAY=`grep management_subnet_ipv6_gateway $CONFIG | cut -d '"' -f4`
+IPV6_SUBNET=`grep management_ipv6_subnet $CONFIG | cut -d '"' -f4`
+
+# Configuration mode
+configure
+
+# IPV4 address
+[ $IPV4 ] && check_addr $IPV4
+
+[ $IPV6 ] && check_addr $IPV6
+
+# Set the interface description
+if [[ -n "$IFNAME" ]]
+then
+	output=$(set interfaces dataplane $IFNAME description 'OAM VLAN for Tail-f Access' )
+	[ $? != 0 ] && logx "set interface $IFNAME description failed:  $output" 1
+fi
+
+# Gateways
+[ $IPV4_GATEWAY ] && [ $IPV4_SUBNET ] && check_route "route" $IPV4_SUBNET $IPV4_GATEWAY
+[ $IPV6_GATEWAY ] && [ $IPV6_SUBNET ] && check_route "route6" $IPV6_SUBNET $IPV6_GATEWAY
+
+if [ "$COMMIT" == "1" ]
+then
+	log "committing changes"
+	output="$(commit)"
+	[ $? != 0 ] && logx "commit failed: $output" 1
+	save
+fi
+
+end_configure
+logx "finished" 0
+
+# End of document
+EOF
